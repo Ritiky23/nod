@@ -281,6 +281,57 @@ export function calendarEventTarget(result: unknown, expectedId: string) {
   };
 }
 
+const driveReadPrefixes = [
+  'GOOGLEDRIVE_GET_',
+  'GOOGLEDRIVE_LIST_',
+  'GOOGLEDRIVE_FIND_',
+  'GOOGLEDRIVE_SEARCH_',
+  'GOOGLEDRIVE_DOWNLOAD_',
+];
+const driveFolderKeys = ['folder_to_upload_to', 'folder_id', 'parent_id', 'parents', 'add_parents'];
+
+export function driveFolderId(action: string, args: Record<string, unknown>) {
+  if (!action.startsWith('GOOGLEDRIVE_') || driveReadPrefixes.some((p) => action.startsWith(p)))
+    return;
+  for (const key of driveFolderKeys) {
+    const raw = args[key];
+    const value =
+      typeof raw === 'string'
+        ? raw.trim()
+        : Array.isArray(raw) && typeof raw[0] === 'string'
+          ? raw[0].trim()
+          : '';
+    if (value) return value;
+  }
+}
+
+export function driveFolderTarget(result: unknown, expectedId: string) {
+  const object = (value: unknown): Record<string, unknown> | undefined =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  const outer = object(result);
+  if (!outer || outer.successful === false || !expectedId.trim() || expectedId.length > 1024)
+    return;
+  const data = object(outer.data) ?? outer;
+  const file = object(data.file) ?? data;
+  if (expectedId !== 'root' && file.id !== expectedId) return;
+  if (typeof file.mimeType === 'string' && file.mimeType !== 'application/vnd.google-apps.folder')
+    return;
+  const rawName = typeof file.name === 'string' ? file.name.trim() : '';
+  if (!rawName) return;
+  const name =
+    rawName.length > 300
+      ? `${rawName.slice(0, 288).replace(/[\uD800-\uDBFF]$/, '')} [truncated]`
+      : rawName;
+  const folderId = typeof file.id === 'string' && file.id.trim() ? file.id.trim() : expectedId;
+  return {
+    folderId,
+    name,
+    ...(file.trashed === true ? { trashed: true } : {}),
+  };
+}
+
 const fieldKeys: Array<[string, string[]]> = [
   ['To', ['recipient_email', 'to', 'extra_recipients']],
   ['Cc', ['cc']],

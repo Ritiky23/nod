@@ -175,6 +175,8 @@ import { events, refresh } from './events.ts';
 import { createIntegrations } from './integrations.ts';
 import {
   calendarEventTarget,
+  driveFolderId,
+  driveFolderTarget,
   gmailDraftTarget,
   gmailMessageTarget,
   isCalendarEventChange,
@@ -1924,7 +1926,8 @@ async function initializeApplication(
                             action === 'GMAIL_DELETE_DRAFT' ||
                             action === 'CONNECTED_MCP_CALL' ||
                             action === 'CONNECTED_HTTP' ||
-                            isCalendarEventChange(action)
+                            isCalendarEventChange(action) ||
+                            Boolean(driveFolderId(action, args))
                             ? verifiedBinding
                             : undefined,
                           validateCalendar,
@@ -2305,6 +2308,56 @@ async function initializeApplication(
     if (!target)
       throw new Error(
         'Nod cannot verify the Calendar event, its dates and its version, so it did not propose or make a change.',
+      );
+    await ledger.action(turn.turnId, readAction, verdict.basis);
+    signal?.throwIfAborted();
+    return target;
+  }
+  async function readDriveFolderTarget(
+    turn: TurnRef,
+    args: Record<string, unknown>,
+    folderId: string,
+    binding: string,
+    signal: AbortSignal | undefined,
+    work: 'read' | 'background',
+  ) {
+    const readAction = 'GOOGLEDRIVE_GET_FILE_METADATA';
+    const readArgs = {
+      connectionId: args.connectionId,
+      file_id: folderId,
+      fields: 'id,name,mimeType,trashed',
+    };
+    await integrations.assertOffered(ownerId, readAction, signal);
+    const verdict = await trust.check(turn, readAction, readArgs, signal);
+    if (verdict.confirm)
+      throw new Error(
+        verdict.reason === 'rule'
+          ? 'Your rules require confirmation before reading this Google Drive folder, so Nod did not identify it or propose a change.'
+          : 'Nod could not authorize the Google Drive read needed to identify this folder, so it did not propose a change.',
+      );
+    let observed: unknown;
+    try {
+      observed = await integrations.execute(
+        ownerId,
+        readAction,
+        readArgs,
+        turn,
+        signal,
+        binding,
+        work,
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw new Error(
+        `The Google Drive folder read failed: ${safeIntegrationFailure(error)} Nod did not change Google Drive.`,
+      );
+    }
+    if ((await integrations.binding(String(args.connectionId ?? ''))) !== binding)
+      throw new Error('The selected Google Drive account changed while Nod read the folder.');
+    const target = driveFolderTarget(observed, folderId);
+    if (!target)
+      throw new Error(
+        'Nod cannot verify the Google Drive destination folder, so it did not propose or make a change.',
       );
     await ledger.action(turn.turnId, readAction, verdict.basis);
     signal?.throwIfAborted();
@@ -3141,6 +3194,7 @@ async function initializeApplication(
           let target:
             | ReturnType<typeof gmailMessageTarget>
             | NonNullable<ReturnType<typeof calendarEventTarget>>['target']
+            | ReturnType<typeof driveFolderTarget>
             | {
                 draftId: string;
                 subject?: string;
@@ -3238,6 +3292,32 @@ async function initializeApplication(
             target = current.target;
             verifiedCalendarRevision = current.revision;
             verifiedInstructionRevision = verdict.instructionRevision;
+          }
+          const folderId = driveFolderId(action, prepared);
+          if (folderId) {
+            const connectionId = prepared.connectionId;
+            if (typeof connectionId !== 'string')
+              throw new Error('Nod cannot identify the Google Drive account proposed for change.');
+            targetBinding = await integrations.binding(connectionId);
+            let boundAccountId: unknown;
+            try {
+              boundAccountId = targetBinding && JSON.parse(targetBinding)[0];
+            } catch {}
+            if (!targetBinding || !account?.accountId || account.accountId !== boundAccountId)
+              throw new Error(
+                'The selected Google Drive account changed before the change was proposed.',
+              );
+            target =
+              folderId === 'root'
+                ? { folderId: 'root', name: 'My Drive' }
+                : await readDriveFolderTarget(
+                    turn,
+                    prepared,
+                    folderId,
+                    targetBinding,
+                    options.signal,
+                    readWork,
+                  );
           }
           const earlierActions = await ledger.earlierActions(
             turn.threadId,

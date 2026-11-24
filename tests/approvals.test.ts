@@ -46,6 +46,8 @@ import {
   approvalContent,
   approvalTitle,
   calendarEventTarget,
+  driveFolderId,
+  driveFolderTarget,
   gmailDraftTarget,
   gmailMessageTarget,
 } from '../src/server/action-presentation.ts';
@@ -1111,6 +1113,98 @@ test('Gmail delete target metadata must match the bound message ID', () => {
   assert.match(long?.from ?? '', / \[truncated\]$/);
   assert.match(long?.to ?? '', / \[truncated\]$/);
   assert.ok((long?.subject?.length ?? 0) <= 300);
+});
+
+test('Google Drive folder target metadata must match the bound folder ID and folder type', () => {
+  assert.equal(
+    driveFolderId('GOOGLEDRIVE_UPLOAD_FILE', { folder_to_upload_to: 'synthetic-folder-1' }),
+    'synthetic-folder-1',
+  );
+  assert.equal(
+    driveFolderId('GOOGLEDRIVE_CREATE_FOLDER', { parent_id: 'synthetic-folder-2' }),
+    'synthetic-folder-2',
+  );
+  assert.equal(
+    driveFolderId('GOOGLEDRIVE_COPY_FILE', { parents: ['synthetic-folder-3'] }),
+    'synthetic-folder-3',
+  );
+  assert.equal(
+    driveFolderId('GOOGLEDRIVE_GET_FILE_METADATA', { folder_id: 'synthetic-folder-1' }),
+    undefined,
+  );
+  assert.deepEqual(
+    driveFolderTarget(
+      {
+        successful: true,
+        data: {
+          id: 'synthetic-folder-1',
+          name: 'Work Invoices',
+          mimeType: 'application/vnd.google-apps.folder',
+          trashed: false,
+        },
+      },
+      'synthetic-folder-1',
+    ),
+    {
+      folderId: 'synthetic-folder-1',
+      name: 'Work Invoices',
+    },
+  );
+  assert.deepEqual(
+    driveFolderTarget(
+      {
+        successful: true,
+        data: {
+          id: 'synthetic-folder-1',
+          name: 'Old Invoices',
+          mimeType: 'application/vnd.google-apps.folder',
+          trashed: true,
+        },
+      },
+      'synthetic-folder-1',
+    ),
+    {
+      folderId: 'synthetic-folder-1',
+      name: 'Old Invoices',
+      trashed: true,
+    },
+  );
+  assert.equal(
+    driveFolderTarget(
+      {
+        data: {
+          id: 'different-folder',
+          name: 'Work Invoices',
+          mimeType: 'application/vnd.google-apps.folder',
+        },
+      },
+      'synthetic-folder-1',
+    ),
+    undefined,
+  );
+  assert.equal(
+    driveFolderTarget(
+      {
+        data: {
+          id: 'synthetic-folder-1',
+          name: 'Not a folder',
+          mimeType: 'application/pdf',
+        },
+      },
+      'synthetic-folder-1',
+    ),
+    undefined,
+  );
+  assert.equal(
+    driveFolderTarget(
+      {
+        successful: false,
+        data: { id: 'synthetic-folder-1', name: 'Work Invoices' },
+      },
+      'synthetic-folder-1',
+    ),
+    undefined,
+  );
 });
 
 test('Gmail draft target requires the bound draft and its current message', () => {
